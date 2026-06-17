@@ -18,7 +18,67 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
-from tools import search_listings, suggest_outfit, create_fit_card
+import json
+import os
+import re
+
+from tools import search_listings, suggest_outfit, create_fit_card, add_to_wardrobe
+
+_WARDROBE_SAVE_PATH = os.path.join(os.path.dirname(__file__), "data", "session_wardrobe.json")
+
+
+# ── query parser ─────────────────────────────────────────────────────────────
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract description, size, and max_price from a natural language query.
+
+    Handles patterns like:
+      "vintage graphic tee under $30, size M"
+      "looking for a flannel shirt size XL below $25"
+      "W30 jeans, depop, max $40"
+
+    Returns a dict with keys: description (str), size (str|None), max_price (float|None).
+    """
+    # max_price: "under $30", "below $25", "max $50", "$30 or less"
+    price_match = re.search(
+        r'(?:under|below|max(?:imum)?|less than|up to)\s*\$?\s*(\d+(?:\.\d+)?)'
+        r'|\$(\d+(?:\.\d+)?)\s*(?:or less|max(?:imum)?)',
+        query,
+        re.IGNORECASE,
+    )
+    if price_match:
+        raw = next(g for g in price_match.groups() if g)
+        max_price = float(raw)
+    else:
+        max_price = None
+
+    # size: "size M", explicit letter labels XS/S/M/L/XL/XXL, denim "W30 L30"
+    size_match = re.search(
+        r'\bsize\s+([A-Za-z0-9/]+)'
+        r'|\b(X{0,2}[SML]|XL|XXL|XXXL|XS)\b'
+        r'|\b(W\d{2}(?:\s*L\s*\d{2})?)\b',
+        query,
+        re.IGNORECASE,
+    )
+    size = next((g for g in size_match.groups() if g), None) if size_match else None
+
+    # description: strip price/size tokens, collapse whitespace
+    desc = query
+    if price_match:
+        desc = desc[: price_match.start()] + " " + desc[price_match.end() :]
+    if size_match:
+        desc = desc[: size_match.start()] + " " + desc[size_match.end() :]
+    desc = re.sub(r'\$\d+(?:\.\d+)?', ' ', desc)
+    desc = re.sub(r'\s+', ' ', desc).strip(' ,.')
+
+    return {"description": desc, "size": size, "max_price": max_price}
+
+
+def _save_wardrobe(wardrobe: dict) -> None:
+    """Persist the wardrobe dict to data/session_wardrobe.json."""
+    with open(_WARDROBE_SAVE_PATH, "w", encoding="utf-8") as f:
+        json.dump(wardrobe, f, indent=2, ensure_ascii=False)
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -92,9 +152,43 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: init session
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: parse natural language → {description, size, max_price}
+    parsed = _parse_query(query)
+    session["parsed"] = parsed
+
+    # Step 3: search listings; bail early if nothing matches
+    results = search_listings(
+        description=parsed["description"],
+        size=parsed["size"],
+        max_price=parsed["max_price"],
+    )
+    session["search_results"] = results
+
+    if not results:
+        parts = [f"No listings found matching '{parsed['description']}'"]
+        if parsed["size"]:
+            parts.append(f"in size {parsed['size']}")
+        if parsed["max_price"] is not None:
+            parts.append(f"under ${parsed['max_price']:.2f}")
+        session["error"] = " ".join(parts) + ". Try broadening your search."
+        return session
+
+    # Step 4: top result is the selected item
+    session["selected_item"] = results[0]
+
+    # Step 5: outfit suggestion (LLM, falls back to generic string — never raises)
+    session["outfit_suggestion"] = suggest_outfit(results[0], wardrobe)
+
+    # Step 6: fit card caption (LLM, falls back to generic string — never raises)
+    session["fit_card"] = create_fit_card(session["outfit_suggestion"], results[0])
+
+    # Step 7: convert listing → wardrobe schema entry, append, persist to JSON
+    session["wardrobe"] = add_to_wardrobe(results[0], wardrobe)
+    _save_wardrobe(session["wardrobe"])
+
     return session
 
 

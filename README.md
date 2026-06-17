@@ -59,3 +59,13 @@ wardrobe = get_example_wardrobe()
 3. Build and test each tool individually before connecting them through your planning loop.
 
 Your implementation files go in this same directory. There's no required file structure for your agent code — organize it however makes sense for your design.
+
+
+Tool inventory: list every tool by name, the input parameters and types that match the function signatures in `tools.py`, the output type, and a short sentence describing the tool's purpose.
+
+data parsing 
+How the planning loop works: describe the conditional tool flow, including when the agent returns early on no search results and when it proceeds to outfit suggestion and caption creation.
+State management approach: describe the session state object, what fields are stored, when they are written, and how the selected item and wardrobe are passed between tools.
+Error handling strategy: explain how each tool handles failure, and include one concrete example from your testing of a terminal command or app run where the agent produced a clean error message instead of crashing.
+Spec reflection: describe one way the spec helped you implement the tools and one way your implementation diverged from it, such as treating the wardrobe as a persistent JSON file instead of a temporary in-memory array.
+AI usage section: include at least two specific examples of what you asked the AI to do, what code or behavior you revised or overrode, and one note about explicitly telling the AI to use the project virtual environment on Windows when testing localhost.

@@ -7,126 +7,82 @@
 
 ---
 
-## Tools
+## Tool Inventory
 
-List every tool your agent will use. For each tool, fill in all four fields.
-You must have at least 3 tools. The three required tools are listed — add any additional tools below them.
+**Tool 1: search_listings**
+- **Inputs:** `description` (str), `size` (str | None), `max_price` (float | None)
+- **Output:** list[dict]
+- **Purpose:** Searches mock listings and returns ranked results matching the description, size, and price filter.
 
-### Tool 1: search_listings
+**Tool 2: suggest_outfit**
+- **Inputs:** `new_item` (dict), `wardrobe` (dict)
+- **Output:** str
+- **Purpose:** Generates outfit styling suggestions using an LLM, returning general advice for empty wardrobes and specific combos for populated ones.
 
-**What it does:**
-<!-- Describe what this tool does in 1–2 sentences -->
-
-**Input parameters:**
-<!-- List each parameter, its type, and what it represents -->
-- `description` (str): ...
-- `size` (str): ...
-- `max_price` (float): ...
-
-**What it returns:**
-<!-- Describe the return value — what fields does a result contain? -->
-
-**What happens if it fails or returns nothing:**
-<!-- What should the agent do if no listings match? -->
+**Tool 3: create_fit_card**
+- **Inputs:** `outfit` (str), `new_item` (dict)
+- **Output:** str
+- **Purpose:** Creates a 2–4 sentence social media caption for the thrift item and outfit combination.
 
 ---
 
-### Tool 2: suggest_outfit
+## How the Planning Loop Works
 
-**What it does:**
-<!-- Describe what this tool does in 1–2 sentences -->
-
-**Input parameters:**
-<!-- List each parameter, its type, and what it represents -->
-- `new_item` (dict): ...
-- `wardrobe` (dict): ...
-
-**What it returns:**
-<!-- Describe the return value -->
-
-**What happens if it fails or returns nothing:**
-<!-- What should the agent do if the wardrobe is empty or no outfit can be suggested? -->
+The agent follows this conditional flow:
+1. Parse the user query into description, size, and max_price using regex.
+2. Call `search_listings()` with the parsed parameters.
+3. **Early exit:** If `search_listings()` returns an empty list, set `session["error"]` and return immediately without calling downstream tools.
+4. Select the top result and store it in `session["selected_item"]`.
+5. Call `suggest_outfit()` with the selected item and wardrobe. The tool checks `wardrobe["items"]` — if empty, it calls the LLM with a general styling prompt; otherwise, it names specific wardrobe pieces in the prompt.
+6. Call `create_fit_card()` with the outfit suggestion and selected item.
+7. Convert the listing to a wardrobe entry, append it to the wardrobe, and persist to `data/session_wardrobe.json`.
+8. Return the completed session dict with all fields populated.
 
 ---
 
-### Tool 3: create_fit_card
+## State Management Approach
 
-**What it does:**
-<!-- Describe what this tool does in 1–2 sentences -->
+The session dict is the single source of truth. Fields include:
+- `query` (str): original user input
+- `parsed` (dict): extracted {description, size, max_price}
+- `search_results` (list): all matching listings
+- `selected_item` (dict): top result
+- `wardrobe` (dict): user's wardrobe with `items` list
+- `outfit_suggestion` (str): output from `suggest_outfit()`
+- `fit_card` (str): output from `create_fit_card()`
+- `error` (str | None): set if the interaction ends early
 
-**Input parameters:**
-<!-- List each parameter, its type, and what it represents -->
-- `outfit` (...): ...
-
-**What it returns:**
-<!-- Describe the return value -->
-
-**What happens if it fails or returns nothing:**
-<!-- What should the agent do if the outfit data is incomplete? -->
-
----
-
-### Additional Tools (if any)
-
-<!-- Copy the block above for any tools beyond the required three -->
+Information flows sequentially: `parsed` → `search_results` → `selected_item` → `outfit_suggestion` → `fit_card`. Each tool receives only the fields it needs and writes its output into a new session field.
 
 ---
 
-## Planning Loop
+## Error Handling Strategy
 
-**How does your agent decide which tool to call next?**
-<!-- Describe the logic your planning loop uses. What does it look at? What conditions change its behavior? How does it know when it's done? -->
+**search_listings:** Returns an empty list (does not raise). When caught, `run_agent()` sets `session["error"] = "No listings found matching '<description>'. Try broadening your search."` and returns early.
 
----
+**suggest_outfit:** If the LLM call fails or returns empty text, it returns a fallback generic string. Example: `"This piece has a versatile, easygoing vibe—try styling it with simple basics, layered outerwear, and one statement accessory for a polished thrifted look."`
 
-## State Management
+**create_fit_card:** If `outfit` is blank, it returns a descriptive error string instead of crashing. If the LLM fails, it returns a safe fallback caption.
 
-**How does information from one tool get passed to the next?**
-<!-- Describe how your agent stores and accesses state within a session. What data is tracked? How is it passed between tool calls? -->
+Concrete example from testing: Running `python agent.py` with a no-results query (`"designer ballgown size XXS under $5"`) prints the error message cleanly without exceptions.
 
 ---
 
-## Error Handling
+## Spec Reflection
 
-For each tool, describe the specific failure mode you're handling and what the agent does in response.
+**How the spec helped:** The spec's emphasis on failure modes (e.g., "what if the wardrobe is empty?") forced explicit handling in each tool. Instead of raising exceptions, each tool returns a string, which simplified the loop logic and prevented crashes.
 
-| Tool | Failure mode | Agent response |
-|------|-------------|----------------|
-| search_listings | No results match the query | |
-| suggest_outfit | Wardrobe is empty | |
-| create_fit_card | Outfit input is missing or incomplete | |
+**How implementation diverged:** The spec suggested wardrobe might remain a temporary in-memory structure, but the implementation persists it to `data/session_wardrobe.json` after each interaction. This allows the wardrobe to accumulate across sessions, which is more realistic for a thrift-discovery app.
 
 ---
 
-## Architecture
+## AI Usage
 
-<!-- Draw a diagram of your agent showing how the components connect:
-     User input → Planning Loop → Tools (search_listings, suggest_outfit, create_fit_card)
-                                                                          ↕
-                                                                   State / Session
-     Show what triggers each tool, how state flows between them, and where error paths branch off.
-     ASCII art, a Mermaid diagram (https://mermaid.js.org/syntax/flowchart.html), or an embedded
-     sketch are all fine. You'll share this diagram with an AI tool when asking it to implement
-     the planning loop and each individual tool. -->
+**Instance 1:** I directed the AI to implement `search_listings()` using a keyword-matching and phrase-matching scoring algorithm. The AI initially returned only exact matches; I overrode it to use fuzzy token overlap so queries like "vintage tee" would match listings with those words in any field (title, description, tags, colors).
 
----
+**Instance 2:** I asked the AI to implement `run_agent()` with early-exit logic. The AI included a try-except block that caught empty results; I overrode it to use an explicit `if not results:` check for clarity and to avoid exception handling overhead.
 
-## AI Tool Plan
-
-<!-- For each part of the implementation below, describe:
-     - Which AI tool you plan to use (Claude, Copilot, ChatGPT, etc.)
-     - What you'll give it as input (which sections of this planning.md, your agent diagram)
-     - What you expect it to produce
-     - How you'll verify the output matches your spec before moving on
-
-     "I'll use AI to help me code" is not a plan.
-     "I'll give Claude my Tool 1 spec (inputs, return value, failure mode) and ask it to implement
-     search_listings() using load_listings() from the data loader — then test it against 3 queries
-     before trusting it" is a plan. -->
-
-**Milestone 3 — Individual tool implementations:**
-
-**Milestone 4 — Planning loop and state management:**
+**Note on venv:** When testing `app.py` on Windows, I had to explicitly tell the AI to activate the virtual environment (`.venv\Scripts\Activate.ps1`) before running the command, as VS Code's Python terminal sometimes doesn't activate it automatically.
 
 ---
 
